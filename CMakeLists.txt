@@ -1,4 +1,11 @@
 CMAKE_MINIMUM_REQUIRED (VERSION 3.2...3.10)
+
+# If the user has vcpkg installed and not already configured, use its toolchain so CMake
+# can discover the exact OpenCV/Eigen packages that were installed for the project.
+IF (NOT DEFINED CMAKE_TOOLCHAIN_FILE AND DEFINED ENV{VCPKG_ROOT})
+  SET (CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+ENDIF ()
+
 PROJECT (RGBTSDF LANGUAGES C CXX VERSION 1.2.0)
 INCLUDE (CheckLanguage)
 
@@ -45,15 +52,28 @@ IF (WITH_OPENMP)
   ENDIF (OPENMP_FOUND)
 ENDIF (WITH_OPENMP)
 
-# Find Eigen
-FIND_PACKAGE (Eigen3 3.2 REQUIRED NO_MODULE)
+# Find Eigen without pinning to an outdated 3.2 requirement. Newer Eigen versions
+# are compatible with the project and are the ones currently provided by vcpkg.
+FIND_PACKAGE (Eigen3 REQUIRED NO_MODULE)
 IF (EIGEN3_FOUND)
   MESSAGE (STATUS "Found Eigen Version: ${Eigen3_VERSION}, ${EIGEN3_INCLUDE_DIRS}.")
 ENDIF (EIGEN3_FOUND)
 
-# Find OpenCV Modules
+# Find OpenCV Modules. vcpkg exposes the package as OpenCV or OpenCV4 depending on the build.
 OPTION (OpenCV_STATIC "Use OpenCV static libs." OFF)
-FIND_PACKAGE (OpenCV QUIET COMPONENTS core calib3d imgproc imgcodecs flann features2d)
+FIND_PACKAGE (OpenCV QUIET CONFIG COMPONENTS core calib3d imgproc imgcodecs flann features2d)
+IF (NOT OpenCV_FOUND)
+  FIND_PACKAGE (OpenCV QUIET COMPONENTS core calib3d imgproc imgcodecs flann features2d)
+ENDIF ()
+IF (NOT OpenCV_FOUND)
+  FIND_PACKAGE (OpenCV4 QUIET CONFIG COMPONENTS core calib3d imgproc imgcodecs flann features2d)
+  IF (OpenCV4_FOUND)
+    SET (OpenCV_FOUND TRUE)
+    SET (OpenCV_INCLUDE_DIRS ${OpenCV4_INCLUDE_DIRS})
+    SET (OpenCV_LIBS ${OpenCV4_LIBS})
+    SET (OpenCV_DEFINITIONS ${OpenCV4_DEFINITIONS})
+  ENDIF ()
+ENDIF ()
 IF (OpenCV_FOUND)
   ADD_LIBRARY (opencv INTERFACE IMPORTED)
   SET_TARGET_PROPERTIES (opencv PROPERTIES 
@@ -61,7 +81,7 @@ IF (OpenCV_FOUND)
    	INTERFACE_LINK_LIBRARIES "${OpenCV_LIBS}")
   TARGET_COMPILE_DEFINITIONS (opencv PUBLIC ${OpenCV_DEFINITIONS})
 ELSE (OpenCV_FOUND)
-  MESSAGE (STATUS "Failed to find OpenCV. Please specify OpenCV directory using OpenCV_DIR variable.")
+  MESSAGE (STATUS "Failed to find OpenCV. Please specify OpenCV directory using OpenCV_DIR variable or configure vcpkg toolchain.")
 ENDIF (OpenCV_FOUND)
 
 SET (DEMO_NAME example) 

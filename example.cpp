@@ -116,35 +116,60 @@ static inline void depthToPoints(const cv::Mat& img, const cv::Mat& K,
 }
 }  // namespace rgbtsdf
 
+// Per-dataset camera intrinsics, taken from each dataset's calib.txt (full
+// 1280x1024 resolution; halved below because depth/rgb images are 640x512).
+struct DatasetConfig {
+  const char* name;
+  const char* input_dir;
+  double fx, fy, cx, cy;
+};
+static const DatasetConfig kDatasets[] = {
+    {"furniture", R"(C:\Users\sunil\rgbtsdf\Furniture_dataset\Furniture)",
+     2534.069580, 2533.682861, 689.968872, 518.446960},
+    {"venus", R"(C:\Users\sunil\rgbtsdf\VenusModel\VenusModel)",
+     2539.214355, 2539.485596, 616.906250, 502.397430},
+};
+
 int main(int argc, char** argv) {
-  std::string input_dir = R"(C:\data\test)";
-  std::string output_dir = input_dir;
+  // usage: example [furniture|venus] [output_dir] [mesh_min_weight]
+  std::string dataset = argc > 1 ? argv[1] : "furniture";
+  const DatasetConfig* cfg = nullptr;
+  for (const auto& d : kDatasets)
+    if (dataset == d.name) cfg = &d;
+  if (!cfg) {
+    fprintf(stderr, "unknown dataset '%s' (expected furniture|venus)\n",
+            dataset.c_str());
+    return 1;
+  }
+  std::string input_dir = cfg->input_dir;
+  std::string output_dir = argc > 2 ? argv[2] : input_dir;
+  float meshMinWeight = argc > 3 ? (float)atof(argv[3]) : 1.0f;
 
   // load data
   std::vector<cv::Mat> RTs;
-  rgbtsdf::Loadrts(R"(C:\data\test\final_pose.txt)", RTs);
+  rgbtsdf::Loadrts((input_dir + "\\final_pose.txt").c_str(), RTs);
   std::vector<cv::String> names;
-  cv::glob(R"(C:\data\test\*.png)", names, false);
+  cv::glob(input_dir + "\\*.png", names, false);
   std::vector<cv::String> rgbnames;
-  cv::glob(R"(C:\data\test\*.jpg)", rgbnames, false);
+  cv::glob(input_dir + "\\*.jpg", rgbnames, false);
 
   // main paramters
   float depthScale = 1 / 64.0f;
   float nearZ = 0;
   float farZ = 1000.0;
-  double voxelUnit = 4.0;
+  double voxelUnit = 2.0;
   double truncatedUnit = voxelUnit * 8;
-  double fx = 2534.069580 / 2;
-  double fy = 2533.682861 / 2;
-  double cx = 689.968872 / 2;
-  double cy = 518.446960 / 2;
+  double fx = cfg->fx / 2;
+  double fy = cfg->fy / 2;
+  double cx = cfg->cx / 2;
+  double cy = cfg->cy / 2;
 
   rgbtsdf::Point3_<double> centerPt = {0, 0, 0};
   cv::Mat K = (cv::Mat_<double>(3, 3) << fx, 0, cx, 0, fy, cy, 0, 0, 1);
 
   // Test CXX API Function.
   using RGBTSFOctree =
-      rgbtsdf::OcTree_<10, 8, rgbtsdf::TSDFType::TINYTSDF, float>;
+      rgbtsdf::OcTree_<10, 8, rgbtsdf::TSDFType::RGBTSDF, float>;
   using RGBTSDFPointMap = RGBTSFOctree::_MapPointData;
   RGBTSFOctree octree(voxelUnit, centerPt);
   octree.setTruncatedDistance(truncatedUnit);
@@ -154,10 +179,10 @@ int main(int argc, char** argv) {
   auto begin = std::chrono::steady_clock::now();
   for (int i = 0; i < (int)names.size(); ++i) {
     printf("%d\n", i);
-    cv::Mat img = cv::imread(names[i], CV_LOAD_IMAGE_UNCHANGED);
+    cv::Mat img = cv::imread(names[i], cv::IMREAD_UNCHANGED);
     cv::Mat depth;
     img.convertTo(depth, CV_32F, depthScale);
-    img = cv::imread(rgbnames[i], CV_LOAD_IMAGE_COLOR);
+    img = cv::imread(rgbnames[i], cv::IMREAD_COLOR);
     cv::resize(img, img, depth.size());
 
     cv::Mat RT = cv::Mat::eye(4, 4, CV_64F);
@@ -165,37 +190,6 @@ int main(int argc, char** argv) {
     RT = RT.inv();
 
     octree.integrateDepthImage(K, RT, nearZ, farZ, depth, img);
-
-    // cv::Mat rasterDepth = cv::Mat::zeros(depth.size(), CV_32F);
-    // cv::Mat rasterImage = cv::Mat::zeros(depth.size(), CV_8UC3);
-    // octree.rasterDepthImage({fx, fy, cx, cy}, RT.ptr<double>(), 100,
-    //     200, {rasterDepth.data, rasterDepth.cols, rasterDepth.rows},
-    //     {rasterImage.data, rasterImage.cols, rasterImage.rows});
-
-    // std::vector<rgbtsdf::Point3_<float>> points;
-    // rgbtsdf::depthToPoints<float>(
-    //    {rasterDepth.data, depth.cols, depth.rows},
-    //    (double(*)[3])K.data, points);
-    // rgbtsdf::RT_<float>(RTs[i].ptr<double>())
-    //    .transform(points.data(), points.data(), points.size());
-
-    // if (false && i % 10 == 0) {
-    //     std::vector<rgbtsdf::Point3_<float>> points, normals;
-    //     for (auto iter = mapPoints.begin(); iter != mapPoints.end();
-    //          ++iter) {
-    //         auto& point_vec = std::get<0>(iter->second);
-    //         auto& color_vec = std::get<1>(iter->second);
-    //         points.insert(
-    //             points.end(), point_vec.begin(), point_vec.end());
-    //         // normals.insert(
-    //         //     normals.end(), normal_vec.begin(),
-    //         normal_vec.end());
-    //     }
-    //     // char buf[256];
-    //     // sprintf_s(buf, R"(C:\data\1\%04d.asc)", i);
-    //     // rgbtsdf::writePointsToASC(buf, (float(*)[3])points.data(),
-    //     //    (float(*)[3])normals.data(), points.size());
-    // }
   }
   auto end = std::chrono::steady_clock::now();
   printf("%f\n",
@@ -221,7 +215,7 @@ int main(int argc, char** argv) {
   triPoints.clear(), triPixels.clear();
 
   std::unordered_map<size_t, int> pointMap[3];
-  octree.extractTriMeshs(triPoints, triPixels, triIndexs, 1, pointMap);
+  octree.extractTriMeshs(triPoints, triPixels, triIndexs, meshMinWeight, pointMap);
   octree.refineTSDFOrientedPoint(triPoints.data(), triPixels.data(),
                                  triPoints.size(), triIndexs.data(),
                                  triIndexs.size(), pointMap, 10);
